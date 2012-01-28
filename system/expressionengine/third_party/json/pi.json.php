@@ -21,12 +21,13 @@ class Json
 	protected $terminate = FALSE;
 	protected $xhr = FALSE;
 	protected $fields = array();
+	protected $field_aliases = array();
 	protected $date_format = FALSE;
 	protected $jsonp = FALSE;
 	protected $callback;
 	protected $camel_case = FALSE;
 	
-	protected static $default_fields = array(
+	protected $default_fields = array(
 		'entries' => array(
 			't.title' => 'title',
 			't.url_title' => 'url_title',
@@ -153,18 +154,18 @@ class Json
 			
 			foreach ($this->fields as $field => $name)
 			{
-				$this->EE->db->select($this->EE->db->protect_identifiers($field).' AS '.$this->EE->db->protect_identifiers($name));
+				$this->EE->db->select($field.' AS '.$this->EE->db->protect_identifiers($name), FALSE);
 			}
 			
 			$this->EE->db->from('channel_titles t')
-				     ->join('channel_data d', 't.entry_id = d.entry_id')
+				     ->join('channel_data wd', 't.entry_id = wd.entry_id')
 				     ->where_in('t.entry_id', $this->entries_entry_ids);
 			
-			if (preg_match('/ORDER BY (.*)?/', $this->channel->sql, $match))
+			if (preg_match('/ORDER BY (.+)/', $this->channel->sql, $match))
 			{
 				if (strpos($match[1], 'w.') !== FALSE)
 				{
-					$this->EE->db->join('channels c', 't.channel_id = c.channel_id');
+					$this->EE->db->join('channels w', 't.channel_id = w.channel_id');
 				}
 				
 				if (strpos($match[1], 'm.') !== FALSE)
@@ -175,6 +176,17 @@ class Json
 				if (strpos($match[1], 'md.') !== FALSE)
 				{
 					$this->EE->db->join('member_data md', 'm.member_id = md.member_id');
+				}
+				
+				if ($this->channel->display_by === 'week' && strpos($match[1], 'yearweek') !== FALSE)
+				{
+					$yearweek = TRUE;
+					
+					$offset = $this->EE->localize->zones[$this->EE->config->item('server_timezone')] * 3600;
+					
+					$format = ($this->EE->TMPL->fetch_param('start_day') === 'Monday') ? '%x%v' : '%X%V';
+					
+					$this->EE->db->select("DATE_FORMAT(FROM_UNIXTIME(entry_date + $offset), '$format') AS yearweek", FALSE);
 				}
 				
 				$this->EE->db->order_by($match[1]);
@@ -204,28 +216,39 @@ class Json
 			
 			foreach ($this->entries as &$entry)
 			{
+				if (isset($yearweek))
+				{
+					unset($entry['yearweek']);
+				}
+				
 				//format dates as javascript unix time (in microseconds!)
-				if (isset($entry['entry_date']))
+				if (isset($entry[$this->field_name('entry_date')]))
 				{
-					$entry['entry_date'] = $this->date_format($entry['entry_date']);
+					$entry[$this->field_name('entry_date')] = $this->date_format($entry[$this->field_name('entry_date')]);
 				}
 				
-				if (isset($entry['edit_date']))
+				if (isset($entry[$this->field_name('edit_date')]))
 				{
-					$entry['edit_date'] = $this->date_format(strtotime($entry['edit_date']));
+					$entry[$this->field_name('edit_date')] = $this->date_format(strtotime($entry[$this->field_name('edit_date')]));
 				}
 				
-				if (isset($entry['expiration_date']))
+				if (isset($entry[$this->field_name('expiration_date')]))
 				{
-					$entry['expiration_date'] = $this->date_format($entry['expiration_date']);
+					$entry[$this->field_name('expiration_date')] = $this->date_format($entry[$this->field_name('expiration_date')]);
 				}
 				
 				foreach ($this->entries_custom_fields as &$field)
 				{
+					$method = 'entries_'.$field['field_type'];
+					
 					//call our custom callback for this fieldtype if it exists
-					if (isset($entry[$field['field_name']]) && is_callable(array($this, 'entries_'.$field['field_type'])))
+					if (isset($entry[$this->field_name($field['field_name'])]) && method_exists($this, $method))
 					{
-						$entry[$field['field_name']] = call_user_func(array($this, 'entries_'.$field['field_type']), $entry['entry_id'], $field, $entry[$field['field_name']]);
+						$entry[$this->field_name($field['field_name'])] = $this->$method(
+							$entry[$this->field_name('entry_id')],
+							$field,
+							$entry[$this->field_name($field['field_name'])]
+						);
 					}
 				}
 				
@@ -262,7 +285,7 @@ class Json
 					}
 				}
 
-				$entry['entry_id'] = (int) $entry['entry_id'];
+				$entry[$this->field_name('entry_id')] = (int) $entry[$this->field_name('entry_id')];
 			}
 		}
 		
@@ -328,7 +351,7 @@ class Json
 		if (is_null($this->entries_relationship_data))
 		{
 			$query = $this->EE->db->select('rel_child_id, rel_id')
-					      ->where('rel_parent_id', $entry_id)
+					      ->where_in('rel_parent_id', $this->entries_entry_ids)
 					      ->get('relationships');
 			
 			$this->entries_relationship_data = array();
@@ -531,7 +554,12 @@ class Json
 	{
 		$method = $this->EE->TMPL->tagparts[1];
 		
-		$default_fields = isset(self::$default_fields[$method]) ? self::$default_fields[$method] : array();
+		if ( ! isset($this->default_fields[$method]))
+		{
+			$this->default_fields[$method] = array();
+		}
+		
+		$default_fields = $this->default_fields[$method];
 		
 		switch($method)
 		{
@@ -555,7 +583,7 @@ class Json
 				
 				foreach ($this->entries_custom_fields as $field)
 				{
-					$default_fields['d.field_id_'.$field['field_id']] = $field['field_name'];
+					$default_fields['wd.field_id_'.$field['field_id']] = $field['field_name'];
 				}
 				
 				break;
@@ -590,7 +618,20 @@ class Json
 			{
 				$split = preg_split('/[:=]/', $field);
 				
-				$this->fields[$split[0]] = isset($split[1]) ? $split[1] : $split[0];
+				//use the MySQL column alias found in default_fields, ie if they request entry_id, we grab t.entry_id, or they request blog_body, we grab wd.field_id_X
+				$column_name = array_search($split[0], $default_fields);
+				
+				if ($column_name === FALSE)
+				{
+					$column_name = $split[0];
+				}
+				
+				if (isset($split[1]))
+				{
+					$this->field_aliases[$split[0]] = $split[1];
+				}
+				
+				$this->fields[$column_name] = isset($split[1]) ? $split[1] : $split[0];
 			}
 		}
 		else
@@ -604,7 +645,9 @@ class Json
 			
 			foreach ($this->fields as &$name)
 			{
-				$name = camelize($name);
+				$this->field_aliases[$name] = camelize($name);
+				
+				$name = $this->field_aliases[$name];
 			}
 		}
 		
@@ -616,14 +659,14 @@ class Json
 			$this->date_format = str_replace('%', '', $this->date_format);
 		}
 		
-		$this->jsonp = $this->EE->TMPL->fetch_param('jsonp') === 'yes';
-		
 		$this->EE->load->library('jsonp');
 		
 		$this->callback = ($this->EE->TMPL->fetch_param('callback') && $this->EE->jsonp->isValidCallback($this->EE->TMPL->fetch_param('callback')))
 				  ? $this->EE->TMPL->fetch_param('callback') : NULL;
 		
-		$this->content_type = $this->EE->TMPL->fetch_param('content_type', ($this->jsonp && $this->callback) ? 'application/javascript' : 'application/json');
+		$this->jsonp = $this->EE->TMPL->fetch_param('jsonp') === 'yes' && ! is_null($this->callback);
+		
+		$this->content_type = $this->EE->TMPL->fetch_param('content_type', ($this->jsonp) ? 'application/javascript' : 'application/json');
 	}
 	
 	protected function check_xhr_required()
@@ -638,14 +681,17 @@ class Json
 			return $this->fields[$field];
 		}
 		
-		$length = strlen($field);
+		if (isset($this->field_aliases[$field]))
+		{
+			return $this->field_aliases[$field];
+		}
 		
-		foreach ($this->fields as $full_field => $name)
+		foreach ($this->fields as $column_name => $field_name)
 		{
 			// ends with
-			if (preg_match('/^\w+\.'.preg_quote($field).'$/', $full_field))
+			if (preg_match('/^\w+\.'.preg_quote($field).'$/', $column_name))
 			{
-				return $name;
+				return $field_name;
 			}
 		}
 		
@@ -660,6 +706,23 @@ class Json
 		}
 		
 		return ($this->date_format) ? date($this->date_format, $date) : (int) ($date.'000');
+	}
+	
+	protected function dealias($row)
+	{
+		foreach ($this->field_aliases as $field => $alias)
+		{
+			if (isset($row[$alias]))
+			{
+				$value = $row[$alias];
+				
+				unset($row[$alias]);
+				
+				$row[$field] = $value;
+			}
+		}
+		
+		return $row;
 	}
 	
 	protected function respond(array $response, $callback = NULL)
@@ -677,7 +740,7 @@ class Json
 		{
 			$response = '';
 		}
-		else if ($this->jsonp && $this->callback)
+		else if ($this->jsonp)
 		{
 			$response = sprintf('%s(%s)', $this->callback, $response);
 		}
