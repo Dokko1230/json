@@ -52,7 +52,7 @@ By default, the date fields are in unix timestamp format, accurate to millisecon
 		var entryDate = new Date(data[i].entry_date);
 	}
 
-If you require a different output format for the date fields, set the date_format= parameter. This uses the php date() function. common formats include "U" (unix timestamp in seconds), "c" (ISO 8601) or "Y-m-d H:i" (2011-12-24 19:06).
+If you require a different output format for the date fields, set the date_format= parameter. This uses the php [date()](http://php.net/manual/en/function.date.php) function. Common formats include "U" (unix timestamp in seconds), "c" (ISO 8601) or "Y-m-d H:i" (2011-12-24 19:06).
 
 ## json:entries
 
