@@ -21,10 +21,60 @@ class Json
 	protected $terminate = FALSE;
 	protected $xhr = FALSE;
 	protected $fields = array();
+	protected $field_aliases = array();
 	protected $date_format = FALSE;
 	protected $jsonp = FALSE;
 	protected $callback;
 	protected $camel_case = FALSE;
+	
+	protected $default_fields = array(
+		'entries' => array(
+			't.title' => 'title',
+			't.url_title' => 'url_title',
+			't.entry_id' => 'entry_id',
+			't.channel_id' => 'channel_id',
+			't.author_id' => 'author_id',
+			't.status' => 'status',
+			't.entry_date' => 'entry_date',
+			't.edit_date' => 'edit_date',
+			't.expiration_date' => 'expiration_date',
+		),
+		'members' => array(
+			'm.member_id' => 'member_id',
+			'm.group_id' => 'group_id',
+			'm.username' => 'username',
+			'm.screen_name' => 'screen_name',
+			'm.email' => 'email',
+			'm.signature' => 'signature',
+			'm.avatar_filename' => 'avatar_filename',
+			'm.avatar_width' => 'avatar_width',
+			'm.avatar_height' => 'avatar_height',
+			'm.photo_filename' => 'photo_filename',
+			'm.photo_width' => 'photo_width',
+			'm.photo_height' => 'photo_height',
+			'm.url' => 'url',
+			'm.location' => 'location',
+			'm.occupation' => 'occupation',
+			'm.interests' => 'interests',
+			'm.bio' => 'bio',
+			'm.join_date' => 'join_date',
+			'm.last_visit' => 'last_visit',
+			'm.last_activity' => 'last_activity',
+			'm.last_entry_date' => 'last_entry_date',
+			'm.last_comment_date' => 'last_comment_date',
+			'm.last_forum_post_date' => 'last_forum_post_date',
+			'm.total_entries' => 'total_entries',
+			'm.total_comments' => 'total_comments',
+			'm.total_forum_topics' => 'total_forum_topics',
+			'm.total_forum_posts' => 'total_forum_posts',
+			'm.language' => 'language',
+			'm.timezone' => 'timezone',
+			'm.daylight_savings' => 'daylight_savings',
+			'm.bday_d' => 'bday_d',
+			'm.bday_m' => 'bday_m',
+			'm.bday_y' => 'bday_y',
+		),
+	);
 	
 	/* caches */
 	public $entries;
@@ -41,7 +91,7 @@ class Json
 	
 	public function entries()
 	{
-		$this->initialize('entries');
+		$this->initialize();
 		
 		//exit if ajax request is required and not found
 		if ($this->check_xhr_required())
@@ -96,64 +146,22 @@ class Json
 		{
 			$this->entries_entry_ids = explode(',', $match[1]);
 			
-			$this->entries_custom_fields = $this->EE->db->select('channel_fields.*, channels.channel_id')
-								    ->from('channel_fields')
-								    ->join('channels', 'channel_fields.group_id = channels.field_group')
-								    ->where_in('channels.channel_name', explode('|', $this->EE->TMPL->fetch_param('channel')))
-								    ->get()
-								    ->result_array();
-			
-			$default_fields = array(
-				't.title',
-				't.url_title',
-				't.entry_id',
-				't.channel_id',
-				't.author_id',
-				't.status',
-				't.entry_date',
-				't.edit_date',
-				't.expiration_date',
-			);
-			
-			$select = array();
-			
-			if ( ! empty($this->fields))
-			{
-				foreach ($default_fields as $field)
-				{
-					$key = substr($field, 2);
-					
-					if (array_key_exists($key, $this->fields))
-					{
-						$select[] = $field;
-					}
-				}
-			}
-			else
-			{
-				$select = $default_fields;
-			}
-			
-			foreach ($this->entries_custom_fields as &$field)
-			{
-				if (empty($this->fields) || array_key_exists($field['field_name'], $this->fields))
-				{
-					$select[] = 'wd.'.$this->EE->db->protect_identifiers('field_id_'.$field['field_id']).' AS '.$this->EE->db->protect_identifiers($field['field_name']);
-				}
-			}
-			
 			//we need entry_id, always grab it
-			if ( ! in_array('t.entry_id', $select))
+			if ( ! array_key_exists('t.entry_id', $this->fields))
 			{
-				$select[] = 't.entry_id';
+				$this->fields['t.entry_id'] = 'entry_id';
 			}
 			
-			$this->EE->db->select(implode(', ', $select), FALSE)
-				     ->from('channel_titles t')
+			foreach ($this->fields as $field => $name)
+			{
+				$this->EE->db->select($field.' AS '.$this->EE->db->protect_identifiers($name), FALSE);
+			}
+			
+			$this->EE->db->from('channel_titles t')
 				     ->join('channel_data wd', 't.entry_id = wd.entry_id')
 				     ->where_in('t.entry_id', $this->entries_entry_ids);
 			
-			if (preg_match('/ORDER BY (.*)?/', $this->channel->sql, $match))
+			if (preg_match('/ORDER BY (.+)/', $this->channel->sql, $match))
 			{
 				if (strpos($match[1], 'w.') !== FALSE)
 				{
@@ -168,6 +176,17 @@ class Json
 				if (strpos($match[1], 'md.') !== FALSE)
 				{
 					$this->EE->db->join('member_data md', 'm.member_id = md.member_id');
+				}
+				
+				if ($this->channel->display_by === 'week' && strpos($match[1], 'yearweek') !== FALSE)
+				{
+					$yearweek = TRUE;
+					
+					$offset = $this->EE->localize->zones[$this->EE->config->item('server_timezone')] * 3600;
+					
+					$format = ($this->EE->TMPL->fetch_param('start_day') === 'Monday') ? '%x%v' : '%X%V';
+					
+					$this->EE->db->select("DATE_FORMAT(FROM_UNIXTIME(entry_date + $offset), '$format') AS yearweek", FALSE);
 				}
 				
 				$this->EE->db->order_by($match[1]);
@@ -189,30 +208,47 @@ class Json
 			
 			$query->free_result();
 			
+			$date_fields = array(
+				'entry_date',
+				'edit_date',
+				'expiration_date',
+			);
+			
 			foreach ($this->entries as &$entry)
 			{
+				if (isset($yearweek))
+				{
+					unset($entry['yearweek']);
+				}
+				
 				//format dates as javascript unix time (in microseconds!)
-				if (isset($entry['entry_date']))
+				if (isset($entry[$this->field_name('entry_date')]))
 				{
-					$entry['entry_date'] = $this->date_format($entry['entry_date']);
+					$entry[$this->field_name('entry_date')] = $this->date_format($entry[$this->field_name('entry_date')]);
 				}
 				
-				if (isset($entry['edit_date']))
+				if (isset($entry[$this->field_name('edit_date')]))
 				{
-					$entry['edit_date'] = $this->date_format(strtotime($entry['edit_date']));
+					$entry[$this->field_name('edit_date')] = $this->date_format(strtotime($entry[$this->field_name('edit_date')]));
 				}
 				
-				if (isset($entry['expiration_date']))
+				if (isset($entry[$this->field_name('expiration_date')]))
 				{
-					$entry['expiration_date'] = $this->date_format($entry['expiration_date']);
+					$entry[$this->field_name('expiration_date')] = $this->date_format($entry[$this->field_name('expiration_date')]);
 				}
 				
 				foreach ($this->entries_custom_fields as &$field)
 				{
+					$method = 'entries_'.$field['field_type'];
+					
 					//call our custom callback for this fieldtype if it exists
-					if (isset($entry[$field['field_name']]) && is_callable(array($this, 'entries_'.$field['field_type'])))
+					if (isset($entry[$this->field_name($field['field_name'])]) && method_exists($this, $method))
 					{
-						$entry[$field['field_name']] = call_user_func(array($this, 'entries_'.$field['field_type']), $entry['entry_id'], $field, $entry[$field['field_name']]);
+						$entry[$this->field_name($field['field_name'])] = $this->$method(
+							$entry[$this->field_name('entry_id')],
+							$field,
+							$entry[$this->field_name($field['field_name'])]
+						);
 					}
 				}
 				
@@ -249,7 +285,7 @@ class Json
 					}
 				}
 
-				$entry['entry_id'] = (int) $entry['entry_id'];
+				$entry[$this->field_name('entry_id')] = (int) $entry[$this->field_name('entry_id')];
 			}
 		}
 		
@@ -315,7 +351,7 @@ class Json
 		if (is_null($this->entries_relationship_data))
 		{
 			$query = $this->EE->db->select('rel_child_id, rel_id')
-					      ->where('rel_parent_id', $entry_id)
+					      ->where_in('rel_parent_id', $this->entries_entry_ids)
 					      ->get('relationships');
 			
 			$this->entries_relationship_data = array();
@@ -458,78 +494,12 @@ class Json
 			return '';
 		}
 		
-		$default_fields = array(
-			'm.member_id',
-			'm.group_id',
-			'm.username',
-			'm.screen_name',
-			'm.email',
-			'm.signature',
-			'm.avatar_filename',
-			'm.avatar_width',
-			'm.avatar_height',
-			'm.photo_filename',
-			'm.photo_width',
-			'm.photo_height',
-			'm.url',
-			'm.location',
-			'm.occupation',
-			'm.interests',
-			'm.bio',
-			'm.join_date',
-			'm.last_visit',
-			'm.last_activity',
-			'm.last_entry_date',
-			'm.last_comment_date',
-			'm.last_forum_post_date',
-			'm.total_entries',
-			'm.total_comments',
-			'm.total_forum_topics',
-			'm.total_forum_posts',
-			'm.language',
-			'm.timezone',
-			'm.daylight_savings',
-			'm.bday_d',
-			'm.bday_m',
-			'm.bday_y',
-		);
-			
-		$query = $this->EE->db->select('m_field_id, m_field_name')
-				      ->get('member_fields');
-		
-		$custom_fields = $query->result_array();
-		
-		$query->free_result();
-		
-		$select = array();
-		
-		if ( ! empty($this->fields))
+		foreach ($this->fields as $field => $name)
 		{
-			foreach ($default_fields as $field)
-			{
-				$key = substr($field, 2);
-				
-				if (array_key_exists($key, $this->fields))
-				{
-					$select[] = $field;
-				}
-			}
-		}
-		else
-		{
-			$select = $default_fields;
+			$this->EE->db->select($this->EE->db->protect_identifiers($field).' AS '.$this->EE->db->protect_identifiers($name));
 		}
 		
-		foreach ($custom_fields as &$field)
-		{
-			if (empty($this->fields) || array_key_exists($field['m_field_name'], $this->fields))
-			{
-				$select[] = 'd.'.$this->EE->db->protect_identifiers('m_field_id_'.$field['m_field_id']).' AS '.$this->EE->db->protect_identifiers($field['m_field_name']);
-			}
-		}
-		
-		$this->EE->db->select(implode(', ', $select), FALSE)
-			     ->from('members m')
+		$this->EE->db->from('members m')
 			     ->join('member_data d', 'm.member_id = d.member_id');
 		
 		if ($this->EE->TMPL->fetch_param('member_id'))
@@ -580,9 +550,18 @@ class Json
 		return $this->respond($members);
 	}
 	
-	protected function initialize($which = NULL)
+	protected function initialize()
 	{
-		switch($which)
+		$method = $this->EE->TMPL->tagparts[1];
+		
+		if ( ! isset($this->default_fields[$method]))
+		{
+			$this->default_fields[$method] = array();
+		}
+		
+		$default_fields = $this->default_fields[$method];
+		
+		switch($method)
 		{
 			case 'entries':
 				//initialize caches
@@ -591,6 +570,37 @@ class Json
 				$this->entries_custom_fields = array();
 				$this->entries_matrix_rows = NULL;
 				$this->entries_relationship_data = NULL;
+			
+				$query = $this->EE->db->select('channel_fields.*, channels.channel_id')
+						      ->from('channel_fields')
+						      ->join('channels', 'channel_fields.group_id = channels.field_group')
+						      ->where_in('channels.channel_name', explode('|', $this->EE->TMPL->fetch_param('channel')))
+						      ->get();
+				
+				$this->entries_custom_fields = $query->result_array();
+				
+				$query->free_result();
+				
+				foreach ($this->entries_custom_fields as $field)
+				{
+					$default_fields['wd.field_id_'.$field['field_id']] = $field['field_name'];
+				}
+				
+				break;
+			
+			case 'members':
+				
+			
+				$query = $this->EE->db->select('m_field_id, m_field_name')
+						      ->get('member_fields');
+				
+				foreach ($query->result() as $row)
+				{
+					$default_fields['d.m_field_id_'.$row->m_field_id] = $row->m_field_name;
+				}
+				
+				$query->free_result();
+				
 				break;
 		}
 		
@@ -608,7 +618,36 @@ class Json
 			{
 				$split = preg_split('/[:=]/', $field);
 				
-				$this->fields[$split[0]] = isset($split[1]) ? $split[1] : $split[0];
+				//use the MySQL column alias found in default_fields, ie if they request entry_id, we grab t.entry_id, or they request blog_body, we grab wd.field_id_X
+				$column_name = array_search($split[0], $default_fields);
+				
+				if ($column_name === FALSE)
+				{
+					$column_name = $split[0];
+				}
+				
+				if (isset($split[1]))
+				{
+					$this->field_aliases[$split[0]] = $split[1];
+				}
+				
+				$this->fields[$column_name] = isset($split[1]) ? $split[1] : $split[0];
+			}
+		}
+		else
+		{
+			$this->fields = $default_fields;
+		}
+		
+		if ($this->camel_case)
+		{
+			$this->EE->load->helper('inflector');
+			
+			foreach ($this->fields as &$name)
+			{
+				$this->field_aliases[$name] = camelize($name);
+				
+				$name = $this->field_aliases[$name];
 			}
 		}
 		
@@ -620,14 +659,14 @@ class Json
 			$this->date_format = str_replace('%', '', $this->date_format);
 		}
 		
-		$this->jsonp = $this->EE->TMPL->fetch_param('jsonp') === 'yes';
-		
 		$this->EE->load->library('jsonp');
 		
 		$this->callback = ($this->EE->TMPL->fetch_param('callback') && $this->EE->jsonp->isValidCallback($this->EE->TMPL->fetch_param('callback')))
 				  ? $this->EE->TMPL->fetch_param('callback') : NULL;
 		
-		$this->content_type = $this->EE->TMPL->fetch_param('content_type', ($this->jsonp && $this->callback) ? 'application/javascript' : 'application/json');
+		$this->jsonp = $this->EE->TMPL->fetch_param('jsonp') === 'yes' && ! is_null($this->callback);
+		
+		$this->content_type = $this->EE->TMPL->fetch_param('content_type', ($this->jsonp) ? 'application/javascript' : 'application/json');
 	}
 	
 	protected function check_xhr_required()
@@ -635,45 +674,28 @@ class Json
 		return $this->xhr && ! $this->EE->input->is_ajax_request();
 	}
 	
-	/**
-	 * Alter the keys of a multidimensional array
-	 *
-	 * when camel_case flag is set, or if alternate key names are provied with the fields param
-	 * 
-	 * @param array   $arrays multidimensional array
-	 * 
-	 * @return array
-	 */
-	protected function clean_keys(array $arrays)
+	protected function field_name($field)
 	{
-		$this->EE->load->helper('inflector');
-		
-		foreach ($arrays as $array)
+		if (isset($this->fields[$field]))
 		{
-			foreach ($array as $key => $value)
+			return $this->fields[$field];
+		}
+		
+		if (isset($this->field_aliases[$field]))
+		{
+			return $this->field_aliases[$field];
+		}
+		
+		foreach ($this->fields as $column_name => $field_name)
+		{
+			// ends with
+			if (preg_match('/^\w+\.'.preg_quote($field).'$/', $column_name))
 			{
-				$new_key = $key;
-				
-				if (isset($this->fields[$key]) && $key !== $this->fields[$key])
-				{
-					$new_key = $this->fields[$key];
-				}
-				
-				if ($this->camel_case)
-				{
-					$new_key = camelize($new_key);
-				}
-				
-				if ($new_key !== $key)
-				{
-					$array[$new_key] = $value;
-					
-					unset($array[$key]);
-				}
+				return $field_name;
 			}
 		}
 		
-		return $array;
+		return FALSE;
 	}
 	
 	protected function date_format($date)
@@ -686,11 +708,26 @@ class Json
 		return ($this->date_format) ? date($this->date_format, $date) : (int) ($date.'000');
 	}
 	
+	protected function dealias($row)
+	{
+		foreach ($this->field_aliases as $field => $alias)
+		{
+			if (isset($row[$alias]))
+			{
+				$value = $row[$alias];
+				
+				unset($row[$alias]);
+				
+				$row[$field] = $value;
+			}
+		}
+		
+		return $row;
+	}
+	
 	protected function respond(array $response, $callback = NULL)
 	{
 		$this->EE->load->library('javascript');
-		
-		$response = $this->clean_keys($response);
 		
 		$response = $this->EE->javascript->generate_json($response, TRUE);
 		
@@ -703,7 +740,7 @@ class Json
 		{
 			$response = '';
 		}
-		else if ($this->jsonp && $this->callback)
+		else if ($this->jsonp)
 		{
 			$response = sprintf('%s(%s)', $this->callback, $response);
 		}
