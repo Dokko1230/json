@@ -315,7 +315,7 @@ class Json
 			
 			foreach ($query->result_array() as $row)
 			{
-				$this->entries_matrix_cols[$row->col_id] = $row;
+				$this->entries_matrix_cols[$row['col_id']] = $row;
 			}
 			
 			$query->free_result();
@@ -335,7 +335,7 @@ class Json
 				{
 					if (isset($this->entries_matrix_cols[$col_id]))
 					{
-						$row[$this->entries_matrix_cols[$col_id]->col_name] = $matrix_row['col_id_'.$col_id];
+						$row[$this->entries_matrix_cols[$col_id]['col_name']] = $matrix_row['col_id_'.$col_id];
 					}
 				}
 				
