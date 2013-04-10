@@ -676,6 +676,11 @@ class Json
 	
 	protected function field_name($field)
 	{
+		if (in_array($field, $this->fields))
+		{
+			return $field;
+		}
+
 		if (isset($this->fields[$field]))
 		{
 			return $this->fields[$field];
